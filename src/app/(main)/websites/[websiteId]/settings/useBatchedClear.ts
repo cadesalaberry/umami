@@ -108,6 +108,8 @@ export function useBatchedClear(websiteId: string) {
 
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault();
+      // Chrome before 119 and older Safari only prompt when returnValue is set.
+      event.returnValue = '';
     };
 
     window.addEventListener('beforeunload', handleBeforeUnload);
