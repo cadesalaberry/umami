@@ -19,36 +19,47 @@ const EVENTS_IN_RANGE = `website_event.website_id = $1::uuid
     and website_event.created_at >= $2
     and website_event.created_at < $3`;
 
-// Also follows the parent event, like the reset does, for legacy rows whose
-// duplicated website id or timestamp drifted from the event.
-const EVENT_DATA_IN_RANGE = `(event_data.website_id = $1::uuid
+// Event data is removed by two indexed statements, like the website reset does:
+// its own duplicated website id and timestamp, then its parent event for legacy
+// rows whose duplicates drifted. Rows matching both are removed by the first one.
+const EVENT_DATA_OWN_RANGE = `event_data.website_id = $1::uuid
     and event_data.created_at >= $2
-    and event_data.created_at < $3)
-  or event_data.website_event_id in (
-    select website_event.event_id from website_event where ${EVENTS_IN_RANGE}
-  )`;
+    and event_data.created_at < $3`;
+
+const EVENT_DATA_BY_EVENT_JOIN = `event_data.website_event_id = website_event.event_id
+    and ${EVENTS_IN_RANGE}`;
+
+// Distinct event data rows removed by the two statements above.
+const EVENT_DATA_UNION = `select event_data.event_data_id from event_data
+    where ${EVENT_DATA_OWN_RANGE}
+  union
+  select event_data.event_data_id from event_data
+    join website_event on ${EVENT_DATA_BY_EVENT_JOIN}`;
 
 // Sessions whose events all fall inside the range. They are empty once the range is deleted.
-const ORPHAN_SESSIONS = `select session.session_id as id
-  from session
-  where session.website_id = $1::uuid
-    and exists (
-      select 1 from website_event
-      where website_event.session_id = session.session_id
-        and ${EVENTS_IN_RANGE}
-    )
-    and not exists (
-      select 1 from website_event
-      where website_event.session_id = session.session_id
-        and website_event.website_id = $1::uuid
-        and (website_event.created_at < $2 or website_event.created_at >= $3)
-    )`;
+// Driven from the events in range so it never walks every session of the website.
+const ORPHAN_SESSIONS = `select candidate.session_id as id
+  from (
+    select distinct website_event.session_id from website_event where ${EVENTS_IN_RANGE}
+  ) as candidate
+  where not exists (
+    select 1 from website_event
+    where website_event.session_id = candidate.session_id
+      and website_event.website_id = $1::uuid
+      and (website_event.created_at < $2 or website_event.created_at >= $3 or website_event.created_at is null)
+  )`;
 
 const REPLAY_VISITS_IN_RANGE = `select distinct session_replay.visit_id as id
   from session_replay
   where session_replay.website_id = $1::uuid
     and session_replay.created_at >= $2
     and session_replay.created_at < $3`;
+
+// Visits of orphan sessions, wherever their chunks sit. $2 is the orphan session ids.
+const ORPHAN_SESSION_VISITS = `select distinct session_replay.visit_id as id
+  from session_replay
+  where session_replay.website_id = $1::uuid
+    and session_replay.session_id = any($2::uuid[])`;
 
 // Rows that belong to an orphan session but can sit outside the range.
 const SESSION_TABLES = [
@@ -99,7 +110,7 @@ export async function getWebsiteDataCounts(
         events: await tx.websiteEvent.count({ where }),
         eventData: await countRows(
           tx,
-          `select count(*)::int as count from event_data where ${EVENT_DATA_IN_RANGE}`,
+          `select count(*)::int as count from (${EVENT_DATA_UNION}) as event_data_rows`,
           params,
         ),
         sessions: await countRows(
@@ -134,11 +145,22 @@ export async function clearWebsiteData(
       // Both sets depend on the rows in range, so collect them before deleting anything.
       const sessionIds = await selectIds(tx, ORPHAN_SESSIONS, params);
       const visitIds = await selectIds(tx, REPLAY_VISITS_IN_RANGE, params);
+      // Orphan sessions also lose replay chunks outside the range, so their saved replays go too.
+      const orphanVisitIds = sessionIds.length
+        ? await selectIds(tx, ORPHAN_SESSION_VISITS, [websiteId, sessionIds])
+        : [];
+      const savedVisitIds = [...new Set([...visitIds, ...orphanVisitIds])];
 
-      const eventData = await tx.$executeRawUnsafe(
-        `delete from event_data where ${EVENT_DATA_IN_RANGE}`,
-        ...params,
-      );
+      // Both statements are index-friendly. The second only sees rows the first left behind.
+      const eventData =
+        (await tx.$executeRawUnsafe(
+          `delete from event_data where ${EVENT_DATA_OWN_RANGE}`,
+          ...params,
+        )) +
+        (await tx.$executeRawUnsafe(
+          `delete from event_data using website_event where ${EVENT_DATA_BY_EVENT_JOIN}`,
+          ...params,
+        ));
       const { count: revenue } = await tx.revenue.deleteMany({ where });
 
       await tx.heatmapEvent.deleteMany({ where });
@@ -164,7 +186,7 @@ export async function clearWebsiteData(
         );
       }
 
-      if (visitIds.length) {
+      if (savedVisitIds.length) {
         await tx.$executeRawUnsafe(
           `delete from session_replay_saved
           where website_id = $1::uuid
@@ -175,7 +197,7 @@ export async function clearWebsiteData(
                 and session_replay.visit_id = session_replay_saved.visit_id
             )`,
           websiteId,
-          visitIds,
+          savedVisitIds,
         );
       }
 
