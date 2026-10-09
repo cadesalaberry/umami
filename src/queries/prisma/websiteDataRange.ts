@@ -1,5 +1,10 @@
 import prisma, { getSchema } from '@/lib/prisma';
 
+const transaction = prisma.transaction as <T>(
+  input: (tx: any) => Promise<T>,
+  options?: any,
+) => Promise<T>;
+
 export interface WebsiteDataCounts {
   events: number;
   eventData: number;
@@ -86,8 +91,8 @@ export async function getWebsiteDataCounts(
   const params = [websiteId, startDate, endDate];
   const where = rangeWhere(websiteId, startDate, endDate);
 
-  return prisma.transaction(
-    async (tx: any) => {
+  return transaction(
+    async tx => {
       await setSearchPath(tx);
 
       return {
@@ -122,8 +127,8 @@ export async function clearWebsiteData(
   const params = [websiteId, startDate, endDate];
   const where = rangeWhere(websiteId, startDate, endDate);
 
-  return prisma.transaction(
-    async (tx: any) => {
+  return transaction(
+    async tx => {
       await setSearchPath(tx);
 
       // Both sets depend on the rows in range, so collect them before deleting anything.
