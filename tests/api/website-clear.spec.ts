@@ -35,6 +35,8 @@ test.describe('Clear website data for a date range', () => {
             ip,
             userAgent: persona.userAgent,
             timestamp: Math.floor(time / 1000),
+            // Every event on Jul 10 and 11 carries one event_data row.
+            ...(time >= at(10, 0) && time < at(12, 0) ? { data: { plan: 'pro' } } : {}),
           },
         });
 
@@ -71,20 +73,20 @@ test.describe('Clear website data for a date range', () => {
 
     const preview = await admin.get(path, { params: { startAt: july10, endAt: july12 } });
     expect(preview.status).toBe(200);
-    expect(preview.body).toMatchObject({ events: 3, sessions: 1 });
+    expect(preview.body).toMatchObject({ events: 3, eventData: 3, sessions: 1 });
 
     const first = await admin.post(path, { startAt: july10, endAt: july11 });
     expect(first.status).toBe(200);
-    expect(first.body).toMatchObject({ events: 2, sessions: 0 });
+    expect(first.body).toMatchObject({ events: 2, eventData: 2, sessions: 0 });
 
     const second = await admin.post(path, { startAt: july11, endAt: july12 });
     expect(second.status).toBe(200);
-    expect(second.body).toMatchObject({ events: 1, sessions: 1 });
+    expect(second.body).toMatchObject({ events: 1, eventData: 1, sessions: 1 });
 
     const remaining = await admin.get(path, {
       params: { startAt: Date.UTC(2026, 6, 1), endAt: Date.UTC(2026, 7, 1) },
     });
-    expect(remaining.body).toMatchObject({ events: 2, sessions: 2 });
+    expect(remaining.body).toMatchObject({ events: 2, eventData: 0, sessions: 2 });
 
     const again = await admin.get(path, { params: { startAt: july10, endAt: july12 } });
     expect(again.body).toEqual({ events: 0, eventData: 0, sessions: 0, revenue: 0, replays: 0 });
