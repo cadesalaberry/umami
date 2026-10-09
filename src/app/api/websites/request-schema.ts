@@ -43,3 +43,14 @@ export const updateWebsiteRequestSchema = z
     replayConfig: replayConfigInputSchema.nullable().optional(),
   })
   .meta({ id: 'UpdateWebsiteRequest' });
+
+export const websiteDataRangeSchema = z
+  .object({
+    startAt: z.coerce.number().int().nonnegative(),
+    endAt: z.coerce.number().int().positive(),
+  })
+  .refine(({ startAt, endAt }) => startAt < endAt, {
+    message: 'startAt must be before endAt',
+    path: ['endAt'],
+  })
+  .meta({ id: 'WebsiteDataRange' });
