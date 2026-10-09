@@ -45,8 +45,13 @@ the range:
 
 Orphan sessions are sessions of the website that have at least one
 `website_event` in the range and no `website_event` outside the range. For
-these sessions the delete also removes `session_data`, `session_link`, any
-leftover `session_replay`, `revenue`, and then the `session` row.
+these sessions the delete also removes `session_data`, `session_link`, and
+any leftover `session_replay`, `heatmap_event` and `revenue`, then the
+`session` row. Session ids go to Postgres as one `uuid[]` parameter, so a
+large number of sessions does not hit the bind parameter limit.
+
+`replays` in the counts is the number of distinct visits that have replay
+chunks in the range.
 
 `session_replay_saved` rows are deleted when their visit has no
 `session_replay` chunks left.
@@ -85,7 +90,8 @@ the contract with `pnpm openapi:contracts`.
 
 ## Queries
 
-In `src/queries/prisma/website.ts`:
+In a new file `src/queries/prisma/websiteDataRange.ts`, exported from
+`src/queries/prisma/index.ts`:
 
 - `getWebsiteDataCounts(websiteId, startDate, endDate)` runs the preview
   counts.
@@ -97,7 +103,7 @@ In `src/queries/prisma/website.ts`:
   3. Collect the orphan session ids, before events are deleted.
   4. `websiteEvent` in range.
   5. For orphan sessions: `session_data`, `session_link`, leftover
-     `session_replay`, `revenue`, then `session`.
+     `session_replay`, `heatmap_event`, `revenue`, then `session`.
   6. `sessionReplaySaved` rows whose visit has no replay chunks left.
 
 Raw SQL sets `search_path` from `getSchema()`, as the reset does.
