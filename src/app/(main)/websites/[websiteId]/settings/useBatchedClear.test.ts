@@ -115,8 +115,16 @@ test('warns before unload only while running', async () => {
   const { result } = renderHook(() => useBatchedClear('website-1'));
   const unload = () => {
     const event = new Event('beforeunload', { cancelable: true });
+    // Older browsers only show the prompt when returnValue is set.
+    let returnValue: unknown;
+    Object.defineProperty(event, 'returnValue', {
+      get: () => returnValue,
+      set: value => {
+        returnValue = value;
+      },
+    });
     window.dispatchEvent(event);
-    return event.defaultPrevented;
+    return event.defaultPrevented && returnValue === '';
   };
 
   let running: Promise<void> = Promise.resolve();
