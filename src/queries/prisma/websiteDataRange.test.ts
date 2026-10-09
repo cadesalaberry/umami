@@ -21,6 +21,7 @@ const range = { websiteId, createdAt: { gte: startDate, lt: endDate } };
 function createTx({
   sessionIds = [] as string[],
   visitIds = [] as string[],
+  orphanVisitIds = [] as string[],
   counts = {} as Record<string, number>,
 } = {}) {
   const calls: string[] = [];
@@ -41,12 +42,16 @@ function createTx({
     $queryRawUnsafe: vi.fn(async (sql: string, ..._params: unknown[]) => {
       if (sql.includes('count(*)')) {
         if (sql.includes('from event_data')) return [{ count: counts.eventData ?? 0 }];
-        if (sql.includes('session.session_id')) return [{ count: counts.sessions ?? 0 }];
+        if (sql.includes('candidate.session_id')) return [{ count: counts.sessions ?? 0 }];
         if (sql.includes('session_replay.visit_id')) return [{ count: counts.replays ?? 0 }];
       }
-      if (sql.includes('session.session_id')) {
+      if (sql.includes('candidate.session_id')) {
         calls.push('selectSessions');
         return sessionIds.map(id => ({ id }));
+      }
+      if (sql.includes('any($2::uuid[])') && sql.includes('session_replay.visit_id')) {
+        calls.push('selectOrphanVisits');
+        return orphanVisitIds.map(id => ({ id }));
       }
       if (sql.includes('session_replay.visit_id')) {
         calls.push('selectVisits');
@@ -61,7 +66,7 @@ function createTx({
       }
       const table = sql.match(/^delete from (\w+)/)?.[1];
       calls.push(`raw:${table}`);
-      if (table === 'event_data') return 7;
+      if (table === 'event_data') return sql.includes(' using ') ? 3 : 4;
       if (table === 'session') return sessionIds.length;
       return 0;
     }),
@@ -84,6 +89,8 @@ describe('clearWebsiteData', () => {
     expect(tx.calls).toEqual([
       'selectSessions',
       'selectVisits',
+      'selectOrphanVisits',
+      'raw:event_data',
       'raw:event_data',
       'revenue',
       'heatmapEvent',
@@ -128,6 +135,7 @@ describe('clearWebsiteData', () => {
 
     const result = await clearWebsiteData(websiteId, startDate, endDate);
 
+    expect(tx.calls).not.toContain('selectOrphanVisits');
     expect(tx.calls).not.toContain('raw:session');
     expect(tx.calls).not.toContain('raw:session_replay_saved');
     expect(result.sessions).toBe(0);
@@ -143,9 +151,62 @@ describe('clearWebsiteData', () => {
     const [orphanSql, ...params] = tx.$queryRawUnsafe.mock.calls[0];
     expect(orphanSql).toContain('not exists');
     expect(orphanSql).toContain(
-      'website_event.created_at < $2 or website_event.created_at >= $3',
+      'website_event.created_at < $2 or website_event.created_at >= $3 or website_event.created_at is null',
     );
     expect(params).toEqual([websiteId, startDate, endDate]);
+  });
+
+  test('deletes event data with two indexed statements and sums their counts', async () => {
+    const tx = createTx();
+    transactionMock.mockImplementation(async cb => cb(tx));
+
+    const result = await clearWebsiteData(websiteId, startDate, endDate);
+
+    const deletes = tx.$executeRawUnsafe.mock.calls.filter(([sql]) =>
+      sql.startsWith('delete from event_data'),
+    );
+    expect(deletes).toHaveLength(2);
+    expect(deletes[0][0]).toContain('website_id = $1::uuid');
+    expect(deletes[0][0]).not.toContain('select');
+    expect(deletes[1][0]).toContain('using website_event');
+    expect(deletes[1][0]).toContain('event_data.website_event_id = website_event.event_id');
+    expect(deletes.map(([, ...params]) => params)).toEqual([
+      [websiteId, startDate, endDate],
+      [websiteId, startDate, endDate],
+    ]);
+    expect(result.eventData).toBe(7);
+  });
+
+  test('orphan sessions are driven from events in range', async () => {
+    const tx = createTx();
+    transactionMock.mockImplementation(async cb => cb(tx));
+
+    await clearWebsiteData(websiteId, startDate, endDate);
+
+    const [orphanSql] = tx.$queryRawUnsafe.mock.calls[0];
+    expect(orphanSql).toContain('select distinct website_event.session_id from website_event');
+    expect(orphanSql).not.toContain('from session ');
+  });
+
+  test('cleans saved replays of orphan sessions whose chunks sit outside the range', async () => {
+    const tx = createTx({
+      sessionIds: ['s1'],
+      visitIds: ['v1', 'v2'],
+      orphanVisitIds: ['v2', 'v3'],
+    });
+    transactionMock.mockImplementation(async cb => cb(tx));
+
+    const result = await clearWebsiteData(websiteId, startDate, endDate);
+
+    const savedDelete = tx.$executeRawUnsafe.mock.calls.find(([sql]) =>
+      sql.startsWith('delete from session_replay_saved'),
+    );
+    expect(savedDelete?.[2]).toEqual(['v1', 'v2', 'v3']);
+    expect(result.replays).toBe(2);
+    const orphanVisits = tx.$queryRawUnsafe.mock.calls.find(([sql]) =>
+      sql.includes('any($2::uuid[])'),
+    );
+    expect(orphanVisits?.slice(1)).toEqual([websiteId, ['s1']]);
   });
 
   test('sets search_path first when the database url has a schema', async () => {
@@ -186,11 +247,26 @@ describe('getWebsiteDataCounts', () => {
 
     const previewSql = previewTx.$queryRawUnsafe.mock.calls.map(([sql]) => sql).join('\n');
     const [orphanSql] = clearTx.$queryRawUnsafe.mock.calls[0];
-    const [eventDataDelete] = clearTx.$executeRawUnsafe.mock.calls.find(([sql]) =>
-      sql.startsWith('delete from event_data'),
-    );
+    const eventDataDeletes = clearTx.$executeRawUnsafe.mock.calls
+      .map(([sql]) => sql)
+      .filter(sql => sql.startsWith('delete from event_data'));
 
     expect(previewSql).toContain(orphanSql);
-    expect(previewSql).toContain(eventDataDelete.replace('delete from event_data', ''));
+    expect(eventDataDeletes).toHaveLength(2);
+    expect(previewSql).toContain(eventDataDeletes[0].replace('delete from event_data where ', ''));
+    expect(previewSql).toContain(
+      eventDataDeletes[1].replace('delete from event_data using website_event where ', ''),
+    );
+  });
+
+  test('previews event data as the union of both delete statements', async () => {
+    const tx = createTx();
+    transactionMock.mockImplementation(async cb => cb(tx));
+
+    await getWebsiteDataCounts(websiteId, startDate, endDate);
+
+    const sql = tx.$queryRawUnsafe.mock.calls.map(([s]) => s).find(s => s.includes('event_data_id'));
+    expect(sql).toContain('union');
+    expect(sql).toContain('event_data.website_event_id = website_event.event_id');
   });
 });
