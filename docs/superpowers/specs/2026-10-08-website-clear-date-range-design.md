@@ -168,9 +168,11 @@ Progress display:
 Add the new keys to `src/components/messages.ts`: a label for the action,
 "Continue" and "Back" if they do not exist, and messages for the warning,
 the preview summary, no data, the progress label, the running totals, the
-error and the done summary. Add the keys to all
-`public/intl/messages/*.json` files, with English text in the non-English
-files, as commit `3e729bc0e` did. Check with `pnpm check:messages`.
+error and the done summary. Add the keys to
+`public/intl/messages/en-US.json` only. Other locales are left for
+translators: copying English text into them adds a large diff with no
+value. Until a locale is translated, the app shows the raw key for these
+strings, because it has no English fallback.
 
 ## Testing
 
