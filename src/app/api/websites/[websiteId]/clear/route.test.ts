@@ -1,7 +1,7 @@
 import { beforeEach, expect, test, vi } from 'vitest';
 import { isRelationalOnly } from '@/lib/db';
 import { parseRequest } from '@/lib/request';
-import { canUpdateWebsite } from '@/permissions';
+import { canDeleteWebsite } from '@/permissions';
 import { clearWebsiteData, getWebsiteDataCounts } from '@/queries/prisma';
 import { websiteDataRangeSchema } from '../../request-schema';
 import { GET, POST } from './route';
@@ -15,7 +15,7 @@ vi.mock('@/lib/request', () => ({
 }));
 
 vi.mock('@/permissions', () => ({
-  canUpdateWebsite: vi.fn(),
+  canDeleteWebsite: vi.fn(),
 }));
 
 vi.mock('@/queries/prisma', () => ({
@@ -25,7 +25,7 @@ vi.mock('@/queries/prisma', () => ({
 
 const isRelationalOnlyMock = vi.mocked(isRelationalOnly);
 const parseRequestMock = vi.mocked(parseRequest);
-const canUpdateWebsiteMock = vi.mocked(canUpdateWebsite);
+const canDeleteWebsiteMock = vi.mocked(canDeleteWebsite);
 const clearWebsiteDataMock = vi.mocked(clearWebsiteData);
 const getWebsiteDataCountsMock = vi.mocked(getWebsiteDataCounts);
 
@@ -37,17 +37,18 @@ const context = { params: Promise.resolve({ websiteId: 'website-1' }) };
 beforeEach(() => {
   isRelationalOnlyMock.mockReset();
   parseRequestMock.mockReset();
-  canUpdateWebsiteMock.mockReset();
+  canDeleteWebsiteMock.mockReset();
   clearWebsiteDataMock.mockReset();
   getWebsiteDataCountsMock.mockReset();
   isRelationalOnlyMock.mockReturnValue(true);
-  canUpdateWebsiteMock.mockResolvedValue(true);
+  canDeleteWebsiteMock.mockResolvedValue(true);
 });
 
 test('schema rejects a range whose start is not before its end', () => {
   expect(websiteDataRangeSchema.safeParse({ startAt: endAt, endAt: startAt }).success).toBe(false);
   expect(websiteDataRangeSchema.safeParse({ startAt, endAt: startAt }).success).toBe(false);
   expect(websiteDataRangeSchema.safeParse({ startAt: 'x', endAt }).success).toBe(false);
+  expect(websiteDataRangeSchema.safeParse({ startAt, endAt: 1e16 }).success).toBe(false);
   expect(websiteDataRangeSchema.safeParse({ startAt: `${startAt}`, endAt: `${endAt}` }).data).toEqual(
     { startAt, endAt },
   );
@@ -72,9 +73,9 @@ test('GET returns bad request without relational storage', async () => {
   expect(getWebsiteDataCountsMock).not.toHaveBeenCalled();
 });
 
-test('GET returns unauthorized without update permission', async () => {
+test('GET returns unauthorized without delete permission', async () => {
   parseRequestMock.mockResolvedValue({ auth: {}, query: { startAt, endAt } });
-  canUpdateWebsiteMock.mockResolvedValue(false);
+  canDeleteWebsiteMock.mockResolvedValue(false);
 
   const response = await GET(new Request('http://localhost/api/websites/website-1/clear'), context);
 
@@ -90,7 +91,7 @@ test('GET returns preview counts', async () => {
 
   expect(response.status).toBe(200);
   await expect(response.json()).resolves.toEqual(counts);
-  expect(canUpdateWebsiteMock).toHaveBeenCalledWith({ user: {} }, 'website-1');
+  expect(canDeleteWebsiteMock).toHaveBeenCalledWith({ user: {} }, 'website-1');
   expect(getWebsiteDataCountsMock).toHaveBeenCalledWith(
     'website-1',
     new Date(startAt),
@@ -111,9 +112,9 @@ test('POST returns bad request without relational storage', async () => {
   expect(clearWebsiteDataMock).not.toHaveBeenCalled();
 });
 
-test('POST returns unauthorized without update permission', async () => {
+test('POST returns unauthorized without delete permission', async () => {
   parseRequestMock.mockResolvedValue({ auth: {}, body: { startAt, endAt } });
-  canUpdateWebsiteMock.mockResolvedValue(false);
+  canDeleteWebsiteMock.mockResolvedValue(false);
 
   const response = await POST(
     new Request('http://localhost/api/websites/website-1/clear', { method: 'POST' }),

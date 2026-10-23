@@ -1,7 +1,7 @@
 import { isRelationalOnly } from '@/lib/db';
 import { parseRequest } from '@/lib/request';
 import { badRequest, json, unauthorized } from '@/lib/response';
-import { canUpdateWebsite } from '@/permissions';
+import { canDeleteWebsite } from '@/permissions';
 import { clearWebsiteData, getWebsiteDataCounts } from '@/queries/prisma';
 import { websiteDataRangeSchema } from '../../request-schema';
 
@@ -24,7 +24,7 @@ export async function GET(
 
   const { websiteId } = await params;
 
-  if (!(await canUpdateWebsite(auth, websiteId))) {
+  if (!(await canDeleteWebsite(auth, websiteId))) {
     return unauthorized();
   }
 
@@ -53,7 +53,7 @@ export async function POST(
 
   const { websiteId } = await params;
 
-  if (!(await canUpdateWebsite(auth, websiteId))) {
+  if (!(await canDeleteWebsite(auth, websiteId))) {
     return unauthorized();
   }
 
