@@ -465,6 +465,7 @@ export const messages: Record<string, string> = {
   invalidDomain: 'message.invalid-domain',
   resetWebsiteWarning: 'message.reset-website-warning',
   deleteDataWarning: 'message.delete-data-warning',
+  deleteDataUnavailable: 'message.delete-data-unavailable',
   deleteDataConfirm: 'message.delete-data-confirm',
   deleteDataEvents: 'message.delete-data-events',
   deleteDataEventData: 'message.delete-data-event-data',

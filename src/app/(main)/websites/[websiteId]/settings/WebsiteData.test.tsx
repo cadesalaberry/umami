@@ -1,10 +1,12 @@
-import { describe, expect, test, vi } from 'vitest';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { render, screen, waitFor } from '@/test/render';
 import { WebsiteData } from './WebsiteData';
 
 const keys = new Proxy({}, { get: (_, key) => String(key) });
+const config = vi.hoisted(() => ({ sessionDeletionEnabled: true }));
 
 vi.mock('@/components/hooks', () => ({
+  useConfig: () => config,
   useLoginQuery: () => ({ user: { id: 'user-1' } }),
   useMessages: () => ({ t: (value: string) => value, labels: keys, messages: keys }),
   useModified: () => ({ touch: vi.fn() }),
@@ -34,6 +36,20 @@ vi.mock('./WebsiteClearDataForm', () => ({
 }));
 
 describe('WebsiteData', () => {
+  beforeEach(() => {
+    config.sessionDeletionEnabled = true;
+  });
+
+  test('disables delete data and explains why when ClickHouse is enabled', () => {
+    config.sessionDeletionEnabled = false;
+
+    render(<WebsiteData websiteId="website-1" />);
+
+    expect(screen.getByRole('button', { name: 'deleteData' })).toBeDisabled();
+    expect(screen.getByText('deleteDataUnavailable')).toBeInTheDocument();
+    expect(screen.queryByText('deleteDataWarning')).not.toBeInTheDocument();
+  });
+
   test('keeps the delete data dialog open while a delete runs', async () => {
     const { user } = render(<WebsiteData websiteId="website-1" />);
 

@@ -474,6 +474,7 @@
     "reset-website": "To reset this website, type {confirmation} in the box below to confirm.",
     "reset-website-warning": "All statistics for this website will be deleted, but your settings will remain intact.",
     "delete-data-warning": "Permanently delete all statistics recorded between two dates. Your settings will remain intact.",
+    "delete-data-unavailable": "Deleting data for a date range is not available when ClickHouse is enabled. It is only supported with relational storage.",
     "delete-data-confirm": "The following data recorded between {startDate} and {endDate} will be permanently deleted:",
     "delete-data-events": "{x, number} {x, plural, one {event} other {events}}",
     "delete-data-event-data": "{x, number} event data {x, plural, one {property} other {properties}}",
