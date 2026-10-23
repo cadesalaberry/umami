@@ -99,7 +99,7 @@ export function WebsiteData({ websiteId, onSave }: { websiteId: string; onSave?:
         <DialogTrigger isOpen={isClearOpen} onOpenChange={handleClearOpenChange}>
           <Button isDisabled={!canClearData}>{t(labels.deleteData)}</Button>
           <Modal>
-            <Dialog title={t(labels.deleteData)} style={{ width: 400 }}>
+            <Dialog title={t(labels.deleteData)} style={{ width: 440, maxWidth: '100%' }}>
               {({ close }) => (
                 <WebsiteClearDataForm
                   websiteId={websiteId}
