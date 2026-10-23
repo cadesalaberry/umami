@@ -5,11 +5,14 @@ import { ClearDataConfirmStep } from './ClearDataConfirmStep';
 import { ClearDataProgressStep } from './ClearDataProgressStep';
 import { type ClearDataMode, ClearDataRangeStep } from './ClearDataRangeStep';
 import {
-  DEFAULT_OLDER_THAN_MONTHS,
+  DEFAULT_OLDER_THAN_AMOUNT,
+  DEFAULT_OLDER_THAN_UNIT,
   getDisplayDates,
   getOlderThanCutoff,
   getOlderThanRange,
+  type OlderThanUnit,
   type Period,
+  parseOlderThanAmount,
 } from './clearDataHelpers';
 import { splitRangeByMonth, toDayRange } from './splitRangeByMonth';
 import { type ClearCounts, EMPTY_COUNTS, useBatchedClear } from './useBatchedClear';
@@ -37,15 +40,17 @@ export function WebsiteClearDataForm({
   const [today] = useState(() => new Date());
   const [step, setStep] = useState<Step>('pick');
   const [mode, setMode] = useState<ClearDataMode>(defaultMode);
-  const [months, setMonths] = useState(DEFAULT_OLDER_THAN_MONTHS);
+  const [amountText, setAmountText] = useState(String(DEFAULT_OLDER_THAN_AMOUNT));
+  const [unit, setUnit] = useState<OlderThanUnit>(DEFAULT_OLDER_THAN_UNIT);
   const [period, setPeriod] = useState<Period>(() => defaultRange ?? { from: today, to: today });
   const { startDate: firstDataDate, isLoading: isDateRangeLoading } = useDateRangeQuery(websiteId);
   const batch = useBatchedClear(websiteId);
 
-  const cutoff = getOlderThanCutoff(months, today);
+  const amount = parseOlderThanAmount(amountText);
+  const cutoff = amount ? getOlderThanCutoff(amount, unit, today) : undefined;
   const range =
     mode === 'olderThan'
-      ? getOlderThanRange(months, firstDataDate, today)
+      ? getOlderThanRange(amount, unit, firstDataDate, today)
       : toDayRange(period.from, period.to);
 
   const preview = useQuery<ClearCounts>({
@@ -80,13 +85,15 @@ export function WebsiteClearDataForm({
     return (
       <ClearDataRangeStep
         mode={mode}
-        months={months}
+        amount={amountText}
+        unit={unit}
         period={period}
         cutoff={cutoff}
         today={today}
-        canContinue={mode === 'period' || !isDateRangeLoading}
+        canContinue={mode === 'period' || (!!cutoff && !isDateRangeLoading)}
         onModeChange={setMode}
-        onMonthsChange={setMonths}
+        onAmountChange={setAmountText}
+        onUnitChange={setUnit}
         onPeriodChange={setPeriod}
         onContinue={() => setStep('confirm')}
         onCancel={onClose}
@@ -96,7 +103,7 @@ export function WebsiteClearDataForm({
 
   if (step === 'confirm') {
     const isOlderThan = mode === 'olderThan';
-    const cutoffDate = formatDay(cutoff);
+    const cutoffDate = cutoff ? formatDay(cutoff) : '';
     const dates = range && getDisplayDates(range);
 
     return (

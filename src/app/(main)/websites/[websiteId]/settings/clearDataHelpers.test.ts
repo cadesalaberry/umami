@@ -7,6 +7,8 @@ import {
   getProgressPercent,
   getRunView,
   isEmptyCounts,
+  MAX_OLDER_THAN_AMOUNT,
+  parseOlderThanAmount,
   updatePeriod,
 } from './clearDataHelpers';
 import { EMPTY_COUNTS } from './useBatchedClear';
@@ -14,13 +16,49 @@ import { EMPTY_COUNTS } from './useBatchedClear';
 const at = (year: number, month: number, day: number, hours = 0) =>
   new Date(year, month, day, hours).getTime();
 
+describe('parseOlderThanAmount', () => {
+  test('accepts whole numbers of at least 1', () => {
+    expect(parseOlderThanAmount('6')).toBe(6);
+    expect(parseOlderThanAmount(' 12 ')).toBe(12);
+    expect(parseOlderThanAmount('1')).toBe(1);
+  });
+
+  test('rejects empty, zero, negative, fractional and non-numeric amounts', () => {
+    for (const value of ['', '0', '-3', '1.5', 'abc', '6e', '1e3']) {
+      expect(parseOlderThanAmount(value)).toBeUndefined();
+    }
+  });
+
+  test('rejects amounts above the maximum', () => {
+    expect(parseOlderThanAmount(String(MAX_OLDER_THAN_AMOUNT))).toBe(MAX_OLDER_THAN_AMOUNT);
+    expect(parseOlderThanAmount(String(MAX_OLDER_THAN_AMOUNT + 1))).toBeUndefined();
+  });
+});
+
 describe('getOlderThanCutoff', () => {
-  test('is the start of the day N months ago', () => {
-    expect(getOlderThanCutoff(6, new Date(2026, 9, 23, 15, 30)).getTime()).toBe(at(2026, 3, 23));
+  const now = new Date(2026, 9, 23, 15, 30);
+
+  test('is the start of the day N units ago', () => {
+    expect(getOlderThanCutoff(10, 'days', now).getTime()).toBe(at(2026, 9, 13));
+    expect(getOlderThanCutoff(2, 'weeks', now).getTime()).toBe(at(2026, 9, 9));
+    expect(getOlderThanCutoff(6, 'months', now).getTime()).toBe(at(2026, 3, 23));
+    expect(getOlderThanCutoff(2, 'years', now).getTime()).toBe(at(2024, 9, 23));
   });
 
   test('clamps to the end of shorter months', () => {
-    expect(getOlderThanCutoff(6, new Date(2026, 7, 31, 10)).getTime()).toBe(at(2026, 1, 28));
+    expect(getOlderThanCutoff(6, 'months', new Date(2026, 7, 31, 10)).getTime()).toBe(
+      at(2026, 1, 28),
+    );
+  });
+
+  test('clamps Feb 29 to Feb 28 in years', () => {
+    expect(getOlderThanCutoff(1, 'years', new Date(2028, 1, 29, 10)).getTime()).toBe(
+      at(2027, 1, 28),
+    );
+  });
+
+  test('crosses month boundaries in days and weeks', () => {
+    expect(getOlderThanCutoff(1, 'weeks', new Date(2026, 2, 3, 9)).getTime()).toBe(at(2026, 1, 24));
   });
 });
 
@@ -28,27 +66,43 @@ describe('getOlderThanRange', () => {
   const now = new Date(2026, 9, 23, 15, 30);
 
   test('runs from the start of the first data month to the cutoff', () => {
-    expect(getOlderThanRange(6, new Date(2025, 10, 12, 8), now)).toEqual({
+    expect(getOlderThanRange(6, 'months', new Date(2025, 10, 12, 8), now)).toEqual({
       startAt: at(2025, 10, 1),
       endAt: at(2026, 3, 23),
     });
   });
 
+  test('uses the selected unit for the cutoff', () => {
+    expect(getOlderThanRange(30, 'days', new Date(2025, 10, 12), now)).toEqual({
+      startAt: at(2025, 10, 1),
+      endAt: at(2026, 8, 23),
+    });
+    expect(getOlderThanRange(1, 'years', new Date(2025, 10, 12), now)).toBeUndefined();
+  });
+
+  test('is undefined for invalid amounts', () => {
+    for (const amount of [undefined, 0, -1, 1.5, Number.NaN, MAX_OLDER_THAN_AMOUNT + 1]) {
+      expect(getOlderThanRange(amount, 'months', new Date(2020, 0, 1), now)).toBeUndefined();
+    }
+  });
+
   test('is undefined without a first data date', () => {
-    expect(getOlderThanRange(6, null, now)).toBeUndefined();
-    expect(getOlderThanRange(6, undefined, now)).toBeUndefined();
+    expect(getOlderThanRange(6, 'months', null, now)).toBeUndefined();
+    expect(getOlderThanRange(6, 'months', undefined, now)).toBeUndefined();
   });
 
   test('is undefined when all data is newer than the cutoff', () => {
-    expect(getOlderThanRange(6, new Date(2026, 5, 1), now)).toBeUndefined();
+    expect(getOlderThanRange(6, 'months', new Date(2026, 5, 1), now)).toBeUndefined();
   });
 
   test('is undefined when the first data month starts on the cutoff', () => {
-    expect(getOlderThanRange(6, new Date(2026, 3, 1), new Date(2026, 9, 1, 12))).toBeUndefined();
+    expect(
+      getOlderThanRange(6, 'months', new Date(2026, 3, 1), new Date(2026, 9, 1, 12)),
+    ).toBeUndefined();
   });
 
   test('keeps a range that starts in the cutoff month but before the cutoff day', () => {
-    expect(getOlderThanRange(6, new Date(2026, 3, 30), now)).toEqual({
+    expect(getOlderThanRange(6, 'months', new Date(2026, 3, 30), now)).toEqual({
       startAt: at(2026, 3, 1),
       endAt: at(2026, 3, 23),
     });

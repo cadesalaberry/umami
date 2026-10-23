@@ -3,41 +3,54 @@ import {
   Column,
   DatePicker,
   ListItem,
+  Row,
   Select,
   Tab,
   TabList,
   TabPanel,
   Tabs,
   Text,
+  TextField,
 } from '@umami/react-zen';
 import { useLocale, useMessages } from '@/components/hooks';
 import { formatDate } from '@/lib/date';
 import { ClearDataFrame } from './ClearDataFrame';
-import { OLDER_THAN_MONTHS, type Period, updatePeriod } from './clearDataHelpers';
+import {
+  OLDER_THAN_UNITS,
+  type OlderThanUnit,
+  type Period,
+  updatePeriod,
+} from './clearDataHelpers';
 
 export type ClearDataMode = 'olderThan' | 'period';
 
 export function ClearDataRangeStep({
   mode,
-  months,
+  amount,
+  unit,
   period,
   cutoff,
   today,
   canContinue,
   onModeChange,
-  onMonthsChange,
+  onAmountChange,
+  onUnitChange,
   onPeriodChange,
   onContinue,
   onCancel,
 }: {
   mode: ClearDataMode;
-  months: number;
+  /** Raw text of the amount field. */
+  amount: string;
+  unit: OlderThanUnit;
   period: Period;
-  cutoff: Date;
+  /** Undefined while the amount is invalid. */
+  cutoff?: Date;
   today: Date;
   canContinue: boolean;
   onModeChange: (mode: ClearDataMode) => void;
-  onMonthsChange: (months: number) => void;
+  onAmountChange: (amount: string) => void;
+  onUnitChange: (unit: OlderThanUnit) => void;
   onPeriodChange: (period: Period) => void;
   onContinue: () => void;
   onCancel?: () => void;
@@ -69,19 +82,33 @@ export function ClearDataRangeStep({
         </TabList>
         <TabPanel id="olderThan">
           <Column gap paddingTop="4">
-            <Select
-              value={String(months)}
-              onChange={value => onMonthsChange(Number(value))}
-              triggerProps={{ 'aria-label': t(labels.olderThan) }}
-            >
-              {OLDER_THAN_MONTHS.map(value => (
-                <ListItem key={value} id={String(value)}>
-                  {t(labels.xMonths, { x: value })}
-                </ListItem>
-              ))}
-            </Select>
+            <Row gap>
+              <TextField
+                type="number"
+                min={1}
+                step={1}
+                inputMode="numeric"
+                aria-label={t(labels.amount)}
+                value={amount}
+                onChange={onAmountChange}
+                style={{ width: 96 }}
+              />
+              <Select
+                value={unit}
+                onChange={value => onUnitChange(value as OlderThanUnit)}
+                triggerProps={{ 'aria-label': t(labels.unit) }}
+              >
+                {OLDER_THAN_UNITS.map(value => (
+                  <ListItem key={value} id={value}>
+                    {t(labels[value])}
+                  </ListItem>
+                ))}
+              </Select>
+            </Row>
             <Text color="muted">
-              {t(messages.deleteDataOlderThan, { date: formatDate(cutoff, 'PP', locale) })}
+              {cutoff
+                ? t(messages.deleteDataOlderThan, { date: formatDate(cutoff, 'PP', locale) })
+                : t(messages.deleteDataOlderThanInvalid)}
             </Text>
           </Column>
         </TabPanel>
