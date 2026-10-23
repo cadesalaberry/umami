@@ -2,6 +2,7 @@ import { Button, Column, Dialog, DialogTrigger, Modal } from '@umami/react-zen';
 import { useState } from 'react';
 import { ActionForm } from '@/components/common/ActionForm';
 import {
+  useConfig,
   useLoginQuery,
   useMessages,
   useModified,
@@ -21,6 +22,9 @@ export function WebsiteData({ websiteId, onSave }: { websiteId: string; onSave?:
   const { router, pathname, teamId, renderUrl } = useNavigation();
   const { data: teams } = useUserTeamsQuery(user.id);
   const isAdmin = pathname.startsWith('/admin');
+  const config = useConfig();
+  // Range deletes run SQL against the relational tables, so they are off when ClickHouse is enabled.
+  const canClearData = !!config?.sessionDeletionEnabled;
   const [isClearOpen, setIsClearOpen] = useState(false);
   const [isClearBusy, setIsClearBusy] = useState(false);
 
@@ -88,9 +92,12 @@ export function WebsiteData({ websiteId, onSave }: { websiteId: string; onSave?:
         </DialogTrigger>
       </ActionForm>
 
-      <ActionForm label={t(labels.deleteData)} description={t(messages.deleteDataWarning)}>
+      <ActionForm
+        label={t(labels.deleteData)}
+        description={t(canClearData ? messages.deleteDataWarning : messages.deleteDataUnavailable)}
+      >
         <DialogTrigger isOpen={isClearOpen} onOpenChange={handleClearOpenChange}>
-          <Button>{t(labels.deleteData)}</Button>
+          <Button isDisabled={!canClearData}>{t(labels.deleteData)}</Button>
           <Modal>
             <Dialog title={t(labels.deleteData)} style={{ width: 400 }}>
               {({ close }) => (
