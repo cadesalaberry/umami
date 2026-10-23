@@ -40,10 +40,16 @@ function createTx({
     heatmapEvent: model('heatmapEvent'),
     sessionReplay: model('sessionReplay'),
     $queryRawUnsafe: vi.fn(async (sql: string, ..._params: unknown[]) => {
-      if (sql.includes('count(*)')) {
-        if (sql.includes('from event_data')) return [{ count: counts.eventData ?? 0 }];
-        if (sql.includes('candidate.session_id')) return [{ count: counts.sessions ?? 0 }];
-        if (sql.includes('session_replay.visit_id')) return [{ count: counts.replays ?? 0 }];
+      if (sql.startsWith('with orphan')) {
+        calls.push('previewMonth');
+        return [
+          {
+            sessions: counts.sessions ?? 0,
+            event_data: counts.eventData ?? 0,
+            orphan_revenue: counts.orphanRevenue ?? 0,
+            replays: counts.replays ?? 0,
+          },
+        ];
       }
       if (sql.includes('candidate.session_id')) {
         calls.push('selectSessions');
@@ -68,6 +74,7 @@ function createTx({
       calls.push(`raw:${table}`);
       if (table === 'event_data') return sql.includes(' using ') ? 3 : 4;
       if (table === 'session') return sessionIds.length;
+      if (table === 'revenue') return counts.orphanRevenue ?? 0;
       return 0;
     }),
   };
@@ -202,11 +209,20 @@ describe('clearWebsiteData', () => {
       sql.startsWith('delete from session_replay_saved'),
     );
     expect(savedDelete?.[2]).toEqual(['v1', 'v2', 'v3']);
-    expect(result.replays).toBe(2);
+    expect(result.replays).toBe(3);
     const orphanVisits = tx.$queryRawUnsafe.mock.calls.find(([sql]) =>
       sql.includes('any($2::uuid[])'),
     );
     expect(orphanVisits?.slice(1)).toEqual([websiteId, ['s1']]);
+  });
+
+  test('counts revenue of orphan sessions outside the range', async () => {
+    const tx = createTx({ sessionIds: ['s1'], counts: { orphanRevenue: 2 } });
+    transactionMock.mockImplementation(async cb => cb(tx));
+
+    const result = await clearWebsiteData(websiteId, startDate, endDate);
+
+    expect(result.revenue).toBe(5);
   });
 
   test('sets search_path first when the database url has a schema', async () => {
@@ -222,51 +238,83 @@ describe('clearWebsiteData', () => {
 });
 
 describe('getWebsiteDataCounts', () => {
-  test('returns preview counts for the range', async () => {
+  test('returns preview counts for a single month', async () => {
     const tx = createTx({
-      counts: { websiteEvent: 40, revenue: 3, eventData: 7, sessions: 2, replays: 1 },
+      counts: { websiteEvent: 40, revenue: 3, orphanRevenue: 2, eventData: 7, sessions: 2, replays: 1 },
     });
     transactionMock.mockImplementation(async cb => cb(tx));
 
     const result = await getWebsiteDataCounts(websiteId, startDate, endDate);
 
-    expect(result).toEqual({ events: 40, eventData: 7, sessions: 2, revenue: 3, replays: 1 });
+    expect(result).toEqual({ events: 40, eventData: 7, sessions: 2, revenue: 5, replays: 1 });
     expect(tx.websiteEvent.count).toHaveBeenCalledWith({ where: range });
     expect(tx.revenue.count).toHaveBeenCalledWith({ where: range });
+    expect(tx.$queryRawUnsafe).toHaveBeenCalledWith(
+      expect.stringContaining('with orphan'),
+      websiteId,
+      startDate,
+      endDate,
+      startDate,
+      endDate,
+    );
     expect(tx.websiteEvent.deleteMany).not.toHaveBeenCalled();
   });
 
-  test('uses the same predicates as the delete', async () => {
+  test('runs one transaction per UTC month and sums the months', async () => {
+    const start = new Date('2026-01-15T00:00:00.000Z');
+    const end = new Date('2026-03-10T00:00:00.000Z');
+    const txs = [1, 2, 3].map(() =>
+      createTx({ counts: { websiteEvent: 10, revenue: 1, eventData: 2, sessions: 1, replays: 1 } }),
+    );
+    txs.forEach(tx => transactionMock.mockImplementationOnce(async cb => cb(tx)));
+
+    const result = await getWebsiteDataCounts(websiteId, start, end);
+
+    expect(transactionMock).toHaveBeenCalledTimes(3);
+    expect(transactionMock).toHaveBeenCalledWith(expect.any(Function), { timeout: 30000 });
+    expect(result).toEqual({ events: 30, eventData: 6, sessions: 3, revenue: 3, replays: 3 });
+    expect(txs.map(tx => tx.$queryRawUnsafe.mock.calls[0].slice(2, 6))).toEqual([
+      [start, new Date('2026-02-01T00:00:00.000Z'), start, end],
+      [new Date('2026-02-01T00:00:00.000Z'), new Date('2026-03-01T00:00:00.000Z'), start, end],
+      [new Date('2026-03-01T00:00:00.000Z'), end, start, end],
+    ]);
+  });
+
+  test('counts each orphan session, event data row and replay in one month only', async () => {
+    const tx = createTx();
+    transactionMock.mockImplementation(async cb => cb(tx));
+
+    await getWebsiteDataCounts(websiteId, startDate, endDate);
+
+    const [sql] = tx.$queryRawUnsafe.mock.calls[0];
+    // Sessions: no event before the month start or after the range end.
+    expect(sql).toContain(
+      'website_event.created_at < $2 or website_event.created_at >= $5 or website_event.created_at is null',
+    );
+    // Event data counted by parent only when its own timestamp is outside the range.
+    expect(sql).toContain('where not (event_data.website_id = $1::uuid');
+    // Replays: no chunk earlier in the range.
+    expect(sql).toContain('and earlier.created_at < $2');
+  });
+
+  test('uses the same event data predicates as the delete', async () => {
     const previewTx = createTx();
-    const clearTx = createTx({ sessionIds: ['s1'] });
+    const clearTx = createTx();
     transactionMock.mockImplementationOnce(async cb => cb(previewTx));
     transactionMock.mockImplementationOnce(async cb => cb(clearTx));
 
     await getWebsiteDataCounts(websiteId, startDate, endDate);
     await clearWebsiteData(websiteId, startDate, endDate);
 
-    const previewSql = previewTx.$queryRawUnsafe.mock.calls.map(([sql]) => sql).join('\n');
-    const [orphanSql] = clearTx.$queryRawUnsafe.mock.calls[0];
+    const [previewSql] = previewTx.$queryRawUnsafe.mock.calls[0];
     const eventDataDeletes = clearTx.$executeRawUnsafe.mock.calls
       .map(([sql]) => sql)
       .filter(sql => sql.startsWith('delete from event_data'));
 
-    expect(previewSql).toContain(orphanSql);
     expect(eventDataDeletes).toHaveLength(2);
     expect(previewSql).toContain(eventDataDeletes[0].replace('delete from event_data where ', ''));
     expect(previewSql).toContain(
       eventDataDeletes[1].replace('delete from event_data using website_event where ', ''),
     );
-  });
-
-  test('previews event data as the union of both delete statements', async () => {
-    const tx = createTx();
-    transactionMock.mockImplementation(async cb => cb(tx));
-
-    await getWebsiteDataCounts(websiteId, startDate, endDate);
-
-    const sql = tx.$queryRawUnsafe.mock.calls.map(([s]) => s).find(s => s.includes('event_data_id'));
-    expect(sql).toContain('union');
-    expect(sql).toContain('event_data.website_event_id = website_event.event_id');
   });
 });
