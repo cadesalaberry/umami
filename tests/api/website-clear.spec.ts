@@ -88,6 +88,12 @@ test.describe('Clear website data for a date range', () => {
     });
     expect(remaining.body).toMatchObject({ events: 2, eventData: 0, sessions: 2 });
 
+    // A preview spanning several months sums one query per month to the same counts.
+    const months = await admin.get(path, {
+      params: { startAt: Date.UTC(2026, 5, 15), endAt: Date.UTC(2026, 8, 15) },
+    });
+    expect(months.body).toEqual(remaining.body);
+
     const again = await admin.get(path, { params: { startAt: july10, endAt: july12 } });
     expect(again.body).toEqual({ events: 0, eventData: 0, sessions: 0, revenue: 0, replays: 0 });
   });
