@@ -78,9 +78,9 @@ export function ClearDataConfirmStep({
           ))}
         </div>
         <Text className={styles.danger}>{t(messages.deleteDataIrreversible)}</Text>
+        <Text>{t(messages.actionConfirmation, { confirmation: CONFIRM_VALUE })}</Text>
         <TextField
           label={t(labels.confirm)}
-          description={t(messages.actionConfirmation, { confirmation: CONFIRM_VALUE })}
           value={confirmation}
           onChange={setConfirmation}
           autoComplete="off"
