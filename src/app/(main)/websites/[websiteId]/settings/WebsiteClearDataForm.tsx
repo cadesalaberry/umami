@@ -1,42 +1,52 @@
-import { Button, Calendar, Column, Loading, ProgressBar, Row, Text } from '@umami/react-zen';
-import { useEffect, useMemo, useState } from 'react';
-import { TypeConfirmationForm } from '@/components/common/TypeConfirmationForm';
-import { useApi, useLocale, useMessages } from '@/components/hooks';
+import { useEffect, useState } from 'react';
+import { useApi, useDateRangeQuery, useLocale, useMessages } from '@/components/hooks';
 import { formatDate } from '@/lib/date';
-import { type MonthRange, splitRangeByMonth, toDayRange } from './splitRangeByMonth';
-import { type ClearCounts, useBatchedClear } from './useBatchedClear';
-
-const CONFIRM_VALUE = 'DELETE';
+import { ClearDataConfirmStep } from './ClearDataConfirmStep';
+import { ClearDataProgressStep } from './ClearDataProgressStep';
+import { type ClearDataMode, ClearDataRangeStep } from './ClearDataRangeStep';
+import {
+  DEFAULT_OLDER_THAN_MONTHS,
+  getDisplayDates,
+  getOlderThanCutoff,
+  getOlderThanRange,
+  type Period,
+} from './clearDataHelpers';
+import { splitRangeByMonth, toDayRange } from './splitRangeByMonth';
+import { type ClearCounts, EMPTY_COUNTS, useBatchedClear } from './useBatchedClear';
 
 type Step = 'pick' | 'confirm' | 'run';
 
 export function WebsiteClearDataForm({
   websiteId,
+  defaultMode = 'olderThan',
   defaultRange,
   onSave,
   onClose,
   onBusyChange,
 }: {
   websiteId: string;
-  defaultRange?: { from: Date; to: Date };
+  defaultMode?: ClearDataMode;
+  defaultRange?: Period;
   onSave?: () => void;
   onClose?: () => void;
   onBusyChange?: (busy: boolean) => void;
 }) {
-  const { t, labels, messages, getErrorMessage } = useMessages();
+  const { t, messages, getErrorMessage } = useMessages();
   const { locale } = useLocale();
   const { get, useQuery } = useApi();
+  const [today] = useState(() => new Date());
   const [step, setStep] = useState<Step>('pick');
-  const [selection, setSelection] = useState<{ from?: Date; to?: Date }>(
-    () => defaultRange ?? { from: new Date(), to: new Date() },
-  );
+  const [mode, setMode] = useState<ClearDataMode>(defaultMode);
+  const [months, setMonths] = useState(DEFAULT_OLDER_THAN_MONTHS);
+  const [period, setPeriod] = useState<Period>(() => defaultRange ?? { from: today, to: today });
+  const { startDate: firstDataDate, isLoading: isDateRangeLoading } = useDateRangeQuery(websiteId);
   const batch = useBatchedClear(websiteId);
 
-  const range = useMemo(
-    () =>
-      selection.from ? toDayRange(selection.from, selection.to ?? selection.from) : undefined,
-    [selection],
-  );
+  const cutoff = getOlderThanCutoff(months, today);
+  const range =
+    mode === 'olderThan'
+      ? getOlderThanRange(months, firstDataDate, today)
+      : toDayRange(period.from, period.to);
 
   const preview = useQuery<ClearCounts>({
     queryKey: ['website:clear-preview', websiteId, range],
@@ -50,29 +60,13 @@ export function WebsiteClearDataForm({
     onBusyChange?.(batch.isBusy);
   }, [batch.isBusy, onBusyChange]);
 
-  const formatDay = (value: number | Date) => formatDate(value, 'PP', locale);
-  const formatMonth = (month?: MonthRange) =>
-    month ? formatDate(month.startAt, 'LLLL yyyy', locale) : '';
-
-  const countItems = (counts: ClearCounts) =>
-    (
-      [
-        ['events', messages.deleteDataEvents],
-        ['eventData', messages.deleteDataEventData],
-        ['sessions', messages.deleteDataSessions],
-        ['revenue', messages.deleteDataRevenue],
-        ['replays', messages.deleteDataReplays],
-      ] as const
-    )
-      .filter(([key]) => counts[key] > 0)
-      .map(([key, message]) => <li key={key}>{t(message, { x: counts[key] })}</li>);
+  const formatDay = (value: Date) => formatDate(value, 'PP', locale);
 
   const handleConfirm = () => {
-    if (!range) {
-      return;
+    if (range) {
+      setStep('run');
+      batch.start(splitRangeByMonth(range.startAt, range.endAt));
     }
-    setStep('run');
-    batch.start(splitRangeByMonth(range.startAt, range.endAt));
   };
 
   const handleDone = () => {
@@ -84,130 +78,51 @@ export function WebsiteClearDataForm({
 
   if (step === 'pick') {
     return (
-      <Column gap>
-        <Calendar
-          mode="range"
-          selected={selection as any}
-          maxValue={new Date()}
-          onSelect={(value: any) => setSelection(value ?? {})}
-        />
-        <Row justifyContent="end" gap>
-          <Button onPress={onClose}>{t(labels.cancel)}</Button>
-          <Button variant="primary" isDisabled={!range} onPress={() => setStep('confirm')}>
-            {t(labels.continue)}
-          </Button>
-        </Row>
-      </Column>
+      <ClearDataRangeStep
+        mode={mode}
+        months={months}
+        period={period}
+        cutoff={cutoff}
+        today={today}
+        canContinue={mode === 'period' || !isDateRangeLoading}
+        onModeChange={setMode}
+        onMonthsChange={setMonths}
+        onPeriodChange={setPeriod}
+        onContinue={() => setStep('confirm')}
+        onCancel={onClose}
+      />
     );
   }
 
   if (step === 'confirm') {
-    if (preview.isLoading || !preview.data) {
-      return preview.error ? (
-        <Column gap>
-          <Text>{getErrorMessage(preview.error as Error)}</Text>
-          <Row justifyContent="end">
-            <Button onPress={() => setStep('pick')}>{t(labels.back)}</Button>
-          </Row>
-        </Column>
-      ) : (
-        <Loading placement="center" />
-      );
-    }
-
-    const items = countItems(preview.data);
-
-    if (!items.length) {
-      return (
-        <Column gap>
-          <Text>{t(messages.deleteDataEmpty)}</Text>
-          <Row justifyContent="end" gap>
-            <Button onPress={() => setStep('pick')}>{t(labels.back)}</Button>
-            <Button onPress={onClose}>{t(labels.close)}</Button>
-          </Row>
-        </Column>
-      );
-    }
+    const isOlderThan = mode === 'olderThan';
+    const cutoffDate = formatDay(cutoff);
+    const dates = range && getDisplayDates(range);
 
     return (
-      <Column gap>
-        <Text>
-          {t(messages.deleteDataConfirm, {
-            startDate: formatDay(range!.startAt),
-            endDate: formatDay((selection.to ?? selection.from)!),
-          })}
-        </Text>
-        <ul>{items}</ul>
-        <Row>
-          <Button variant="quiet" onPress={() => setStep('pick')}>
-            {t(labels.back)}
-          </Button>
-        </Row>
-        <TypeConfirmationForm
-          confirmationValue={CONFIRM_VALUE}
-          onConfirm={handleConfirm}
-          onClose={onClose}
-          buttonLabel={t(labels.delete)}
-          buttonVariant="danger"
-        />
-      </Column>
+      <ClearDataConfirmStep
+        summary={
+          isOlderThan
+            ? t(messages.deleteDataOlderThanConfirm, { date: cutoffDate })
+            : t(messages.deleteDataConfirm, {
+                startDate: dates ? formatDay(dates.startDate) : '',
+                endDate: dates ? formatDay(dates.endDate) : '',
+              })
+        }
+        emptyMessage={
+          isOlderThan
+            ? t(messages.deleteDataOlderThanEmpty, { date: cutoffDate })
+            : t(messages.deleteDataEmpty)
+        }
+        counts={range ? preview.data : EMPTY_COUNTS}
+        isLoading={!!range && !preview.data && !preview.error}
+        error={preview.error ? getErrorMessage(preview.error as Error) : undefined}
+        onBack={() => setStep('pick')}
+        onCancel={onClose}
+        onConfirm={handleConfirm}
+      />
     );
   }
 
-  const total = batch.months.length;
-  const totalsMessage = { events: batch.totals.events, sessions: batch.totals.sessions };
-
-  return (
-    <Column gap>
-      <ProgressBar value={total ? (batch.completed / total) * 100 : 0} />
-      {batch.isBusy && (
-        <>
-          <Text>
-            {t(messages.deleteDataProgress, {
-              month: formatMonth(batch.current),
-              current: batch.completed + 1,
-              total,
-            })}
-          </Text>
-          <Text>{t(messages.deleteDataTotals, totalsMessage)}</Text>
-          <Row justifyContent="end">
-            <Button isDisabled={batch.status === 'stopping'} onPress={batch.stop}>
-              {t(labels.stop)}
-            </Button>
-          </Row>
-        </>
-      )}
-      {batch.status === 'error' && (
-        <>
-          <Text>{t(messages.deleteDataError, { month: formatMonth(batch.current) })}</Text>
-          <Text>{getErrorMessage(batch.error)}</Text>
-          <Text>{t(messages.deleteDataTotals, totalsMessage)}</Text>
-          <Row justifyContent="end" gap>
-            <Button onPress={handleDone}>{t(labels.close)}</Button>
-            <Button variant="primary" onPress={batch.retry}>
-              {t(labels.retry)}
-            </Button>
-          </Row>
-        </>
-      )}
-      {batch.status === 'stopped' && (
-        <>
-          <Text>
-            {t(messages.deleteDataStopped, {
-              month: formatMonth(batch.months[batch.completed - 1]),
-            })}
-          </Text>
-          <Text>{t(messages.deleteDataTotals, totalsMessage)}</Text>
-        </>
-      )}
-      {batch.status === 'done' && <Text>{t(messages.deleteDataDone, totalsMessage)}</Text>}
-      {(batch.status === 'stopped' || batch.status === 'done') && (
-        <Row justifyContent="end">
-          <Button variant="primary" onPress={handleDone}>
-            {t(labels.close)}
-          </Button>
-        </Row>
-      )}
-    </Column>
-  );
+  return <ClearDataProgressStep batch={batch} onClose={handleDone} />;
 }
