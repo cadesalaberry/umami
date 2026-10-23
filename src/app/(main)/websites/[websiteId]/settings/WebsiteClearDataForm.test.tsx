@@ -71,8 +71,11 @@ describe('WebsiteClearDataForm', () => {
     const { user } = render(<WebsiteClearDataForm websiteId="website-1" />);
 
     expect(screen.getByRole('tab', { name: 'Older than', selected: true })).toBeInTheDocument();
-    expect(screen.getByText('6 months')).toBeInTheDocument();
-    expect(screen.getByText('Data recorded before Apr 23, 2026')).toBeInTheDocument();
+    expect(screen.getByLabelText('Amount')).toHaveValue(6);
+    expect(screen.getByRole('combobox', { name: 'Unit' })).toHaveTextContent('Months');
+    expect(
+      screen.getByText('Data recorded before Apr 23, 2026 will be deleted.'),
+    ).toBeInTheDocument();
     expect(screen.queryByText('From')).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Continue' }));
@@ -84,6 +87,55 @@ describe('WebsiteClearDataForm', () => {
       startAt: at(2025, 10, 1),
       endAt: at(2026, 3, 23),
     });
+  });
+
+  test('updates the cutoff and the preview range when the amount changes', async () => {
+    getMock.mockResolvedValue(counts({ events: 3 }));
+    const { user } = render(<WebsiteClearDataForm websiteId="website-1" />);
+
+    await user.clear(screen.getByLabelText('Amount'));
+    await user.type(screen.getByLabelText('Amount'), '3');
+
+    expect(
+      screen.getByText('Data recorded before Jul 23, 2026 will be deleted.'),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+
+    expect(getMock).toHaveBeenCalledWith('/websites/website-1/clear', {
+      startAt: at(2025, 10, 1),
+      endAt: at(2026, 6, 23),
+    });
+  });
+
+  test('updates the cutoff and the preview range when the unit changes', async () => {
+    getMock.mockResolvedValue(counts({ events: 3 }));
+    const { user } = render(<WebsiteClearDataForm websiteId="website-1" />);
+
+    await user.click(screen.getByRole('combobox', { name: 'Unit' }));
+    await user.click(await screen.findByRole('option', { name: 'Weeks' }));
+
+    expect(
+      screen.getByText('Data recorded before Sep 11, 2026 will be deleted.'),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+
+    expect(getMock).toHaveBeenCalledWith('/websites/website-1/clear', {
+      startAt: at(2025, 10, 1),
+      endAt: at(2026, 8, 11),
+    });
+  });
+
+  test('blocks continuing with an invalid amount', async () => {
+    const { user } = render(<WebsiteClearDataForm websiteId="website-1" />);
+
+    await user.clear(screen.getByLabelText('Amount'));
+    await user.type(screen.getByLabelText('Amount'), '0');
+
+    expect(screen.getByText('Enter a whole number of 1 or more.')).toBeInTheDocument();
+    expect(screen.queryByText(/will be deleted\./)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
   });
 
   test('waits for the first data date before continuing', () => {
