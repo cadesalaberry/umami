@@ -23,8 +23,7 @@ export function WebsiteData({ websiteId, onSave }: { websiteId: string; onSave?:
   const { data: teams } = useUserTeamsQuery(user.id);
   const isAdmin = pathname.startsWith('/admin');
   const config = useConfig();
-  // Range deletes run SQL against the relational tables, so they are off when ClickHouse is enabled.
-  const canClearData = !!config?.sessionDeletionEnabled;
+  const canClearData = !!config?.dataDeletionEnabled;
   const [isClearOpen, setIsClearOpen] = useState(false);
   const [isClearBusy, setIsClearBusy] = useState(false);
 

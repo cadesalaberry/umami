@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@/test/render';
 import { WebsiteData } from './WebsiteData';
 
 const keys = new Proxy({}, { get: (_, key) => String(key) });
-const config = vi.hoisted(() => ({ sessionDeletionEnabled: true }));
+const config = vi.hoisted(() => ({ dataDeletionEnabled: true }));
 
 vi.mock('@/components/hooks', () => ({
   useConfig: () => config,
@@ -37,11 +37,11 @@ vi.mock('./WebsiteClearDataForm', () => ({
 
 describe('WebsiteData', () => {
   beforeEach(() => {
-    config.sessionDeletionEnabled = true;
+    config.dataDeletionEnabled = true;
   });
 
   test('disables delete data and explains why when ClickHouse is enabled', () => {
-    config.sessionDeletionEnabled = false;
+    config.dataDeletionEnabled = false;
 
     render(<WebsiteData websiteId="website-1" />);
 
