@@ -29,7 +29,7 @@ const canDeleteWebsiteMock = vi.mocked(canDeleteWebsite);
 const clearWebsiteDataMock = vi.mocked(clearWebsiteData);
 const getWebsiteDataCountsMock = vi.mocked(getWebsiteDataCounts);
 
-const counts = { events: 40, eventData: 7, sessions: 2, revenue: 3, replays: 1 };
+const counts = { events: 40, eventData: 7, sessions: 2, revenue: 3, replays: 1, heatmaps: 4 };
 const startAt = Date.UTC(2026, 8, 1);
 const endAt = Date.UTC(2026, 9, 1);
 const context = { params: Promise.resolve({ websiteId: 'website-1' }) };
@@ -49,6 +49,10 @@ test('schema rejects a range whose start is not before its end', () => {
   expect(websiteDataRangeSchema.safeParse({ startAt, endAt: startAt }).success).toBe(false);
   expect(websiteDataRangeSchema.safeParse({ startAt: 'x', endAt }).success).toBe(false);
   expect(websiteDataRangeSchema.safeParse({ startAt, endAt: 1e16 }).success).toBe(false);
+  // JSON values that z.coerce would have turned into 0, deleting from the epoch.
+  for (const value of [null, '', false, [], '1.5', '-1']) {
+    expect(websiteDataRangeSchema.safeParse({ startAt: value, endAt }).success).toBe(false);
+  }
   expect(websiteDataRangeSchema.safeParse({ startAt: `${startAt}`, endAt: `${endAt}` }).data).toEqual(
     { startAt, endAt },
   );

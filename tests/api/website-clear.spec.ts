@@ -1,5 +1,5 @@
 import { expect, test } from './fixtures';
-import { createWebsite, deleteWebsite } from './helpers/entities';
+import { createTeam, createWebsite, deleteTeam, deleteWebsite } from './helpers/entities';
 import { PERSONAS } from './seed/dataset';
 
 // All events sit in July 2026, so each visitor keeps one session (the session salt rotates monthly).
@@ -61,6 +61,36 @@ test.describe('Clear website data for a date range', () => {
     expect(
       (await admin.get(path, { params: { startAt: params.endAt, endAt: params.startAt } })).status,
     ).toBe(400);
+    // A null start must not be read as the epoch.
+    expect((await admin.post(path, { startAt: null, endAt: params.endAt })).status).toBe(400);
+  });
+
+  test('team members follow the team website delete permission', async ({
+    admin,
+    user,
+    viewer,
+    seed,
+  }) => {
+    const team = await createTeam(admin);
+
+    try {
+      const addMember = (userId: string, role: string) =>
+        admin.post(`/api/teams/${team.id}/users`, { userId, role });
+
+      expect((await addMember(seed.user.id, 'team-manager')).status).toBe(200);
+      expect((await addMember(seed.viewer.id, 'team-view-only')).status).toBe(200);
+
+      const teamWebsite = await createWebsite(admin, { teamId: team.id });
+      const path = `/api/websites/${teamWebsite.id}/clear`;
+      const params = { startAt: at(10, 0), endAt: at(12, 0) };
+
+      // Managers hold website:delete, view-only members hold nothing.
+      expect((await user.get(path, { params })).status).toBe(200);
+      expect((await viewer.get(path, { params })).status).toBe(401);
+      expect((await viewer.post(path, params)).status).toBe(401);
+    } finally {
+      await deleteTeam(admin, team.id);
+    }
   });
 
   test('preview counts match the batched delete, and data outside the range is kept', async ({
@@ -95,7 +125,14 @@ test.describe('Clear website data for a date range', () => {
     expect(months.body).toEqual(remaining.body);
 
     const again = await admin.get(path, { params: { startAt: july10, endAt: july12 } });
-    expect(again.body).toEqual({ events: 0, eventData: 0, sessions: 0, revenue: 0, replays: 0 });
+    expect(again.body).toEqual({
+      events: 0,
+      eventData: 0,
+      sessions: 0,
+      revenue: 0,
+      replays: 0,
+      heatmaps: 0,
+    });
   });
 });
 

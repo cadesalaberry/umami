@@ -47,10 +47,14 @@ export const updateWebsiteRequestSchema = z
 // Largest timestamp a JavaScript Date can hold, in milliseconds.
 const MAX_TIMESTAMP = 8.64e15;
 
+// Numbers from JSON bodies, or digit-only strings from query parameters. Unlike z.coerce,
+// it rejects null, '' and false instead of turning them into 0.
+const timestampSchema = z.union([z.number(), z.string().regex(/^\d+$/).transform(Number)]);
+
 export const websiteDataRangeSchema = z
   .object({
-    startAt: z.coerce.number().int().nonnegative().max(MAX_TIMESTAMP),
-    endAt: z.coerce.number().int().positive().max(MAX_TIMESTAMP),
+    startAt: timestampSchema.pipe(z.number().int().nonnegative().max(MAX_TIMESTAMP)),
+    endAt: timestampSchema.pipe(z.number().int().positive().max(MAX_TIMESTAMP)),
   })
   .refine(({ startAt, endAt }) => startAt < endAt, {
     message: 'startAt must be before endAt',
