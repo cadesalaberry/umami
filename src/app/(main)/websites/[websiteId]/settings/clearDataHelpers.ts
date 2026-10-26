@@ -36,7 +36,7 @@ export function parseOlderThanAmount(value: string): number | undefined {
 
 export type CountKey = keyof ClearCounts;
 
-const COUNT_KEYS: CountKey[] = ['events', 'eventData', 'sessions', 'revenue', 'replays'];
+const COUNT_KEYS: CountKey[] = ['events', 'eventData', 'sessions', 'revenue', 'replays', 'heatmaps'];
 
 export function getOlderThanCutoff(amount: number, unit: OlderThanUnit, now: Date): Date {
   return startOfDay(SUBTRACT[unit](now, amount));

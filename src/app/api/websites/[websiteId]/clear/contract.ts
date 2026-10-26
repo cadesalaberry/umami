@@ -10,7 +10,8 @@ const websiteDataCountsSchema = z
     eventData: z.number().int().describe('Number of event data rows.'),
     sessions: z.number().int().describe('Number of sessions.'),
     revenue: z.number().int().describe('Number of revenue rows.'),
-    replays: z.number().int().describe('Number of session replays.'),
+    replays: z.number().int().describe('Number of session replays left with no recording.'),
+    heatmaps: z.number().int().describe('Number of heatmap events.'),
   })
   .meta({ id: 'WebsiteDataCounts' });
 

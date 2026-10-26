@@ -21,6 +21,7 @@ const counts = (values: Partial<Record<string, number>>) => ({
   sessions: 0,
   revenue: 0,
   replays: 0,
+  heatmaps: 0,
   ...values,
 });
 
@@ -200,6 +201,17 @@ describe('WebsiteClearDataForm', () => {
 
     await user.type(screen.getByLabelText('Confirm'), 'E');
     expect(deleteButton).toBeEnabled();
+  });
+
+  test('offers to delete a period that only holds heatmap events', async () => {
+    getMock.mockResolvedValue(counts({ heatmaps: 12 }));
+    const { user } = renderPeriod();
+
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+
+    const heatmaps = await screen.findByTestId('clear-data-count-heatmaps');
+    expect(within(heatmaps).getByText('12')).toBeInTheDocument();
+    expect(screen.getByLabelText('Confirm')).toBeInTheDocument();
   });
 
   test('goes back to the range step', async () => {

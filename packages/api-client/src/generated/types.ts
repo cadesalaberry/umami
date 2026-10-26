@@ -3122,7 +3122,9 @@ export interface components {
       eventData: number;
       /** @description Number of events (including pageviews). */
       events: number;
-      /** @description Number of session replays. */
+      /** @description Number of heatmap events. */
+      heatmaps: number;
+      /** @description Number of session replays left with no recording. */
       replays: number;
       /** @description Number of revenue rows. */
       revenue: number;
@@ -3131,9 +3133,9 @@ export interface components {
     };
     WebsiteDataRange: {
       /** @description End of the date range as a Unix timestamp in milliseconds. */
-      endAt: number;
+      endAt: number | string;
       /** @description Start of the date range as a Unix timestamp in milliseconds. */
-      startAt: number;
+      startAt: number | string;
     };
     WebsiteEvent: {
       /**
@@ -13353,9 +13355,9 @@ export interface operations {
     parameters: {
       query: {
         /** @description End of the date range as a Unix timestamp in milliseconds. */
-        endAt: number;
+        endAt: number | string;
         /** @description Start of the date range as a Unix timestamp in milliseconds. */
-        startAt: number;
+        startAt: number | string;
       };
       header?: never;
       path: {

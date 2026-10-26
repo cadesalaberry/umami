@@ -23,6 +23,11 @@ function createTx({
   visitIds = [] as string[],
   orphanVisitIds = [] as string[],
   counts = {} as Record<string, number>,
+  // First and last row in the range, read by the preview. Defaults to the whole of September.
+  bounds = {
+    first_at: new Date('2026-09-01T00:00:00.000Z'),
+    last_at: new Date('2026-09-30T23:59:59.999Z'),
+  } as { first_at: Date | null; last_at: Date | null },
 } = {}) {
   const calls: string[] = [];
   const model = (name: string, deleted = 0) => ({
@@ -37,9 +42,13 @@ function createTx({
     calls,
     websiteEvent: model('websiteEvent', 40),
     revenue: model('revenue', 3),
-    heatmapEvent: model('heatmapEvent'),
+    heatmapEvent: model('heatmapEvent', 5),
     sessionReplay: model('sessionReplay'),
     $queryRawUnsafe: vi.fn(async (sql: string, ..._params: unknown[]) => {
+      if (sql.includes('as first_at')) {
+        calls.push('bounds');
+        return [bounds];
+      }
       if (sql.startsWith('with orphan')) {
         calls.push('previewMonth');
         return [
@@ -47,9 +56,15 @@ function createTx({
             sessions: counts.sessions ?? 0,
             event_data: counts.eventData ?? 0,
             orphan_revenue: counts.orphanRevenue ?? 0,
+            orphan_heatmaps: counts.orphanHeatmaps ?? 0,
             replays: counts.replays ?? 0,
           },
         ];
+      }
+      if (sql.includes('unnest($2::uuid[])')) {
+        calls.push('countRemovedVisits');
+        // Every visit that lost chunks is gone unless the test says otherwise.
+        return [{ count: counts.removedVisits ?? (_params[1] as string[]).length }];
       }
       if (sql.includes('candidate.session_id')) {
         calls.push('selectSessions');
@@ -75,6 +90,7 @@ function createTx({
       if (table === 'event_data') return sql.includes(' using ') ? 3 : 4;
       if (table === 'session') return sessionIds.length;
       if (table === 'revenue') return counts.orphanRevenue ?? 0;
+      if (table === 'heatmap_event') return counts.orphanHeatmaps ?? 0;
       return 0;
     }),
   };
@@ -109,9 +125,17 @@ describe('clearWebsiteData', () => {
       'raw:heatmap_event',
       'raw:revenue',
       'raw:session',
+      'countRemovedVisits',
       'raw:session_replay_saved',
     ]);
-    expect(result).toEqual({ events: 40, eventData: 7, sessions: 2, revenue: 3, replays: 1 });
+    expect(result).toEqual({
+      events: 40,
+      eventData: 7,
+      sessions: 2,
+      revenue: 3,
+      replays: 1,
+      heatmaps: 5,
+    });
     expect(tx.websiteEvent.deleteMany).toHaveBeenCalledWith({ where: range });
     expect(tx.revenue.deleteMany).toHaveBeenCalledWith({ where: range });
     expect(tx.heatmapEvent.deleteMany).toHaveBeenCalledWith({ where: range });
@@ -210,19 +234,36 @@ describe('clearWebsiteData', () => {
     );
     expect(savedDelete?.[2]).toEqual(['v1', 'v2', 'v3']);
     expect(result.replays).toBe(3);
+    expect(tx.$queryRawUnsafe).toHaveBeenCalledWith(
+      expect.stringContaining('unnest($2::uuid[])'),
+      websiteId,
+      ['v1', 'v2', 'v3'],
+    );
     const orphanVisits = tx.$queryRawUnsafe.mock.calls.find(([sql]) =>
       sql.includes('any($2::uuid[])'),
     );
     expect(orphanVisits?.slice(1)).toEqual([websiteId, ['s1']]);
   });
 
-  test('counts revenue of orphan sessions outside the range', async () => {
-    const tx = createTx({ sessionIds: ['s1'], counts: { orphanRevenue: 2 } });
+  test('counts revenue and heatmap events of orphan sessions outside the range', async () => {
+    const tx = createTx({ sessionIds: ['s1'], counts: { orphanRevenue: 2, orphanHeatmaps: 4 } });
     transactionMock.mockImplementation(async cb => cb(tx));
 
     const result = await clearWebsiteData(websiteId, startDate, endDate);
 
     expect(result.revenue).toBe(5);
+    expect(result.heatmaps).toBe(9);
+  });
+
+  test('counts only replays left with no chunk', async () => {
+    const tx = createTx({ visitIds: ['v1', 'v2'], counts: { removedVisits: 1 } });
+    transactionMock.mockImplementation(async cb => cb(tx));
+
+    const result = await clearWebsiteData(websiteId, startDate, endDate);
+
+    expect(result.replays).toBe(1);
+    const [sql] = tx.$queryRawUnsafe.mock.calls.find(([s]) => s.includes('unnest')) ?? [];
+    expect(sql).toContain('not exists');
   });
 
   test('sets search_path first when the database url has a schema', async () => {
@@ -240,15 +281,32 @@ describe('clearWebsiteData', () => {
 describe('getWebsiteDataCounts', () => {
   test('returns preview counts for a single month', async () => {
     const tx = createTx({
-      counts: { websiteEvent: 40, revenue: 3, orphanRevenue: 2, eventData: 7, sessions: 2, replays: 1 },
+      counts: {
+        websiteEvent: 40,
+        revenue: 3,
+        orphanRevenue: 2,
+        heatmapEvent: 6,
+        orphanHeatmaps: 1,
+        eventData: 7,
+        sessions: 2,
+        replays: 1,
+      },
     });
     transactionMock.mockImplementation(async cb => cb(tx));
 
     const result = await getWebsiteDataCounts(websiteId, startDate, endDate);
 
-    expect(result).toEqual({ events: 40, eventData: 7, sessions: 2, revenue: 5, replays: 1 });
+    expect(result).toEqual({
+      events: 40,
+      eventData: 7,
+      sessions: 2,
+      revenue: 5,
+      replays: 1,
+      heatmaps: 7,
+    });
     expect(tx.websiteEvent.count).toHaveBeenCalledWith({ where: range });
     expect(tx.revenue.count).toHaveBeenCalledWith({ where: range });
+    expect(tx.heatmapEvent.count).toHaveBeenCalledWith({ where: range });
     expect(tx.$queryRawUnsafe).toHaveBeenCalledWith(
       expect.stringContaining('with orphan'),
       websiteId,
@@ -260,23 +318,69 @@ describe('getWebsiteDataCounts', () => {
     expect(tx.websiteEvent.deleteMany).not.toHaveBeenCalled();
   });
 
-  test('runs one transaction per UTC month and sums the months', async () => {
-    const start = new Date('2026-01-15T00:00:00.000Z');
-    const end = new Date('2026-03-10T00:00:00.000Z');
-    const txs = [1, 2, 3].map(() =>
-      createTx({ counts: { websiteEvent: 10, revenue: 1, eventData: 2, sessions: 1, replays: 1 } }),
+  test('returns zeros without a month query when the range holds no data', async () => {
+    const tx = createTx({ bounds: { first_at: null, last_at: null } });
+    transactionMock.mockImplementation(async cb => cb(tx));
+
+    const result = await getWebsiteDataCounts(websiteId, new Date(0), endDate);
+
+    expect(result).toEqual({
+      events: 0,
+      eventData: 0,
+      sessions: 0,
+      revenue: 0,
+      replays: 0,
+      heatmaps: 0,
+    });
+    expect(tx.calls).toEqual(['bounds']);
+    expect(tx.$queryRawUnsafe).toHaveBeenCalledWith(
+      expect.stringContaining('least('),
+      websiteId,
+      new Date(0),
+      endDate,
     );
-    txs.forEach(tx => transactionMock.mockImplementationOnce(async cb => cb(tx)));
+  });
+
+  test('runs one transaction per UTC month between the first and last data', async () => {
+    const start = new Date(0);
+    const end = new Date('2027-01-01T00:00:00.000Z');
+    const firstAt = new Date('2026-01-15T00:00:00.000Z');
+    const lastAt = new Date('2026-03-09T23:59:59.999Z');
+    const boundsTx = createTx({ bounds: { first_at: firstAt, last_at: lastAt } });
+    const monthTxs = [1, 2, 3].map(() =>
+      createTx({
+        counts: {
+          websiteEvent: 10,
+          revenue: 1,
+          heatmapEvent: 2,
+          eventData: 2,
+          sessions: 1,
+          replays: 1,
+        },
+      }),
+    );
+
+    for (const tx of [boundsTx, ...monthTxs]) {
+      transactionMock.mockImplementationOnce(async cb => cb(tx));
+    }
 
     const result = await getWebsiteDataCounts(websiteId, start, end);
 
-    expect(transactionMock).toHaveBeenCalledTimes(3);
+    expect(transactionMock).toHaveBeenCalledTimes(4);
     expect(transactionMock).toHaveBeenCalledWith(expect.any(Function), { timeout: 30000 });
-    expect(result).toEqual({ events: 30, eventData: 6, sessions: 3, revenue: 3, replays: 3 });
-    expect(txs.map(tx => tx.$queryRawUnsafe.mock.calls[0].slice(2, 6))).toEqual([
-      [start, new Date('2026-02-01T00:00:00.000Z'), start, end],
+    expect(result).toEqual({
+      events: 30,
+      eventData: 6,
+      sessions: 3,
+      revenue: 3,
+      replays: 3,
+      heatmaps: 6,
+    });
+    // Months cover only the data, while the orphan checks keep the full range.
+    expect(monthTxs.map(tx => tx.$queryRawUnsafe.mock.calls[0].slice(2, 6))).toEqual([
+      [firstAt, new Date('2026-02-01T00:00:00.000Z'), start, end],
       [new Date('2026-02-01T00:00:00.000Z'), new Date('2026-03-01T00:00:00.000Z'), start, end],
-      [new Date('2026-03-01T00:00:00.000Z'), end, start, end],
+      [new Date('2026-03-01T00:00:00.000Z'), new Date('2026-03-10T00:00:00.000Z'), start, end],
     ]);
   });
 
@@ -286,27 +390,32 @@ describe('getWebsiteDataCounts', () => {
 
     await getWebsiteDataCounts(websiteId, startDate, endDate);
 
-    const [sql] = tx.$queryRawUnsafe.mock.calls[0];
+    const [sql] =
+      tx.$queryRawUnsafe.mock.calls.find(([s]) => s.startsWith('with orphan')) ?? [];
     // Sessions: no event before the month start or after the range end.
     expect(sql).toContain(
       'website_event.created_at < $2 or website_event.created_at >= $5 or website_event.created_at is null',
     );
     // Event data counted by parent only when its own timestamp is outside the range.
     expect(sql).toContain('where not (event_data.website_id = $1::uuid');
-    // Replays: no chunk earlier in the range.
-    expect(sql).toContain('and earlier.created_at < $2');
+    // Replays: every chunk from the month start up to the range end.
+    expect(sql).toContain(
+      'other.created_at < $2 or other.created_at >= $5 or other.created_at is null',
+    );
   });
 
   test('uses the same event data predicates as the delete', async () => {
     const previewTx = createTx();
     const clearTx = createTx();
     transactionMock.mockImplementationOnce(async cb => cb(previewTx));
+    transactionMock.mockImplementationOnce(async cb => cb(previewTx));
     transactionMock.mockImplementationOnce(async cb => cb(clearTx));
 
     await getWebsiteDataCounts(websiteId, startDate, endDate);
     await clearWebsiteData(websiteId, startDate, endDate);
 
-    const [previewSql] = previewTx.$queryRawUnsafe.mock.calls[0];
+    const [previewSql] =
+      previewTx.$queryRawUnsafe.mock.calls.find(([s]) => s.startsWith('with orphan')) ?? [];
     const eventDataDeletes = clearTx.$executeRawUnsafe.mock.calls
       .map(([sql]) => sql)
       .filter(sql => sql.startsWith('delete from event_data'));
